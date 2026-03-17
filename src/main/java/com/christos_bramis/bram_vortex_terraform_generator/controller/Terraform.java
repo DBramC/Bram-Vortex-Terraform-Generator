@@ -7,6 +7,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/terraform")
 public class Terraform {
 
-
+    private int stop;
 
 }
