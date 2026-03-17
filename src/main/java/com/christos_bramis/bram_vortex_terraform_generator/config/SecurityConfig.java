@@ -7,32 +7,45 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
 
+    private final JwtAuthenticationFilter jwtFilter;
+
+    // Injection του φίλτρου που κάνει το verification
+    public SecurityConfig(JwtAuthenticationFilter jwtFilter) {
+        this.jwtFilter = jwtFilter;
+    }
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                // Απενεργοποίηση CSRF για να δουλεύουν τα POST requests (όπως το /generate)
+                // 1. Απενεργοποίηση CSRF (απαραίτητο για stateless REST APIs)
                 .csrf(AbstractHttpConfigurer::disable)
 
-                .authorizeHttpRequests(auth -> auth
-                        // Επιτρέπουμε τα public endpoints που έρχονται μέσω Kong
-                        .requestMatchers("/terraform/status/**").permitAll()
-                        .requestMatchers("/terraform/download/**").permitAll()
+                // 2. Stateless διαχείριση (δεν χρησιμοποιούμε sessions/cookies)
+                .sessionManagement(session -> session
+                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
 
-                        // Επιτρέπουμε το /generate  (θα καλείται μόνο εσωτερικά αφού δεν υπάρχει στο Ingress)
+                // 3. Ρύθμιση κανόνων πρόσβασης
+                .authorizeHttpRequests(auth -> auth
+                        // Επιτρέπουμε το webhook από τον Analyzer (εσωτερική επικοινωνία)
                         .requestMatchers("/terraform/generate/**").permitAll()
 
+                        // Τα endpoints για download και status απαιτούν έγκυρο JWT
+                        .requestMatchers("/terraform/download/**").authenticated()
+                        .requestMatchers("/terraform/status/**").authenticated()
+
+                        // Οτιδήποτε άλλο απαιτεί επίσης login
                         .anyRequest().authenticated()
                 )
 
-                // Stateless διαχείριση για Microservices
-                .sessionManagement(session -> session
-                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-                );
+                // 4. Προσθήκη του JWT Filter ΠΡΙΝ το βασικό φίλτρο της Spring
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
