@@ -96,11 +96,19 @@ public class TerraformService {
 
                 String aiResponse = chatModel.call(finalPrompt);
 
+                // Καθαρισμός του string από πιθανά Markdown backticks πριν το parsing
+                String cleanResponse = aiResponse.trim();
+                if (cleanResponse.startsWith("```")) {
+                    cleanResponse = cleanResponse.replaceAll("^```json\\s*", "").replaceAll("```$", "").trim();
+                }
+
                 // Parsing με Spring AI Converter
-                Map<String, Object> tfFilesRaw = mapOutputConverter.convert(aiResponse);
+                Map<String, Object> tfFilesRaw = mapOutputConverter.convert(cleanResponse);
 
                 Map<String, String> tfFiles = new HashMap<>();
-                tfFilesRaw.forEach((k, v) -> tfFiles.put(k, String.valueOf(v)));
+                if (tfFilesRaw != null) {
+                    tfFilesRaw.forEach((k, v) -> tfFiles.put(k, String.valueOf(v)));
+                }
 
                 // ΒΗΜΑ Δ: Δημιουργία ZIP In-Memory
                 System.out.println("📦 [TF-SERVICE] Packing files into ZIP in-memory...");
