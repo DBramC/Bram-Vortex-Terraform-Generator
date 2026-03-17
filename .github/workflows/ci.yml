@@ -1,0 +1,18 @@
+name: Repo Analyzer Service CI
+
+on:
+  push:
+    branches: [ "main" ] # Ή "master", έλεγξε πώς λέγεται το branch σου
+
+jobs:
+  deploy:
+    # Καλούμε το "μυαλό" από το κεντρικό repo
+    uses: DBramC/Bram-Vortex/.github/workflows/gitops-pipeline.yml@main
+    with:
+      # Το όνομα που θα έχει η εικόνα στο DockerHub
+      image_name: christosbramis/bram-vortex-terraform-generator
+      # Πού βρίσκεται το YAML μέσα στο κεντρικό repo (Bram-Vortex)
+      manifest_path: k8s/Repo-Analyzer/repo-analyzer-deployment.yaml
+
+    # Αυτό δίνει πρόσβαση στα secrets που μόλις έφτιαξες
+    secrets: inherit
