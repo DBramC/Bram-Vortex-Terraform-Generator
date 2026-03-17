@@ -23,7 +23,7 @@ public class SecurityConfig {
                         .requestMatchers("/terraform/status/**").permitAll()
                         .requestMatchers("/terraform/download/**").permitAll()
 
-                        // Επιτρέπουμε το /generate (θα καλείται μόνο εσωτερικά αφού δεν υπάρχει στο Ingress)
+                        // Επιτρέπουμε το /generate  (θα καλείται μόνο εσωτερικά αφού δεν υπάρχει στο Ingress)
                         .requestMatchers("/terraform/generate/**").permitAll()
 
                         .anyRequest().authenticated()
