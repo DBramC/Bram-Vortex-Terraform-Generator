@@ -14,5 +14,5 @@ jobs:
       # Πού βρίσκεται το YAML μέσα στο κεντρικό repo (Bram-Vortex)
       manifest_path: k8s/Terraform-Generator/terraform-generator-deployment.yaml
 
-    # Αυτό δίνει πρόσβαση στα secrets που μόλις έφτιαξες
+    # Αυτό δίνει πρόσβαση στα secrets που μόλις έφτιαξες.
     secrets: inherit
