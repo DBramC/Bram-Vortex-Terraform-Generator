@@ -3,8 +3,7 @@ package com.christos_bramis.bram_vortex_terraform_generator.service;
 import org.springframework.stereotype.Service;
 import org.springframework.vault.core.VaultTemplate;
 import org.springframework.vault.support.VaultResponse;
-import java.security.KeyFactory;
-import java.security.PublicKey;
+import java.security.*;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 import java.util.Map;
@@ -18,7 +17,48 @@ public class VaultService {
         this.vaultTemplate = vaultTemplate;
     }
 
-    // Ανάκτηση του Public Key από το Transit engine της Vault
+    /**
+     * Δημιουργεί ένα RSA Key Pair, αποθηκεύει το Private Key στο Vault
+     * και επιστρέφει το Public Key σε OpenSSH format.
+     */
+    public String createAndStoreSshKeyPair(String userId,String repoName, String jobId) {
+        try {
+            System.out.println("🔑 [VAULT-SERVICE] Generating RSA 4096-bit Key Pair for Job: " + jobId);
+
+            // 1. Παραγωγή του Key Pair
+            KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
+            keyGen.initialize(4096);
+            KeyPair pair = keyGen.generateKeyPair();
+
+            // 2. Format Private Key σε PEM format (για την Ansible)
+            String privateKeyPem = "-----BEGIN RSA PRIVATE KEY-----\n" +
+                    Base64.getMimeEncoder().encodeToString(pair.getPrivate().getEncoded()) +
+                    "\n-----END RSA PRIVATE KEY-----";
+
+            // 3. Format Public Key σε OpenSSH format (για την Terraform)
+            // Σημείωση: Το πρόθεμα 'ssh-rsa' είναι απαραίτητο για τα Cloud Providers
+            String publicKeyOpenSSH = "ssh-rsa " +
+                    Base64.getEncoder().encodeToString(pair.getPublic().getEncoded()) +
+                    " vortex-generated-key-" + jobId;
+
+            // 4. Αποθήκευση στο Vault
+            // Path: secret/users/{userId}/jobs/{jobId}
+            String vaultPath = String.format("secret/users/%s/%s/%s", userId, repoName, jobId);
+
+            System.out.println("🏦 [VAULT-SERVICE] Storing Private Key in Vault path: " + vaultPath);
+
+            vaultTemplate.write(vaultPath, Map.of("private_key", privateKeyPem));
+
+            return publicKeyOpenSSH;
+
+        } catch (Exception e) {
+            System.err.println("❌ [VAULT-SERVICE ERROR] Failed to manage SSH keys: " + e.getMessage());
+            throw new RuntimeException("Could not create/store SSH key pair", e);
+        }
+    }
+
+    // --- Οι υπάρχουσες μέθοδοί σου ---
+
     public String getSigningPublicKey() {
         String path = "transit/keys/jwt-signing-key";
         try {
@@ -37,7 +77,6 @@ public class VaultService {
         }
     }
 
-    // Μετατροπή του PEM String σε αντικείμενο PublicKey
     public PublicKey getKeyFromPEM(String pem) throws Exception {
         String publicKeyPEM = pem
                 .replace("-----BEGIN PUBLIC KEY-----", "")

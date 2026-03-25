@@ -17,6 +17,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -27,14 +29,17 @@ public class TerraformService {
     private final AnalysisJobRepository analysisJobRepository;
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
-    private final MapOutputConverter mapOutputConverter; // Προσθήκη για επαναχρησιμοποίηση
+    private final MapOutputConverter mapOutputConverter;
+    private final VaultService vaultService; // ΝΕΟ: Προσθήκη VaultService
 
     public TerraformService(TerraformJobRepository terraformJobRepository,
                             AnalysisJobRepository analysisJobRepository,
-                            ChatModel chatModel) {
+                            ChatModel chatModel,
+                            VaultService vaultService) { // Ενημέρωση Constructor
         this.terraformJobRepository = terraformJobRepository;
         this.analysisJobRepository = analysisJobRepository;
         this.chatModel = chatModel;
+        this.vaultService = vaultService;
         this.objectMapper = new ObjectMapper();
         this.mapOutputConverter = new MapOutputConverter();
     }
@@ -49,7 +54,7 @@ public class TerraformService {
         job.setStatus("GENERATING");
         terraformJobRepository.save(job);
 
-        java.util.concurrent.CompletableFuture.runAsync(() -> {
+        CompletableFuture.runAsync(() -> {
             try {
                 System.out.println("🔍 [TF-SERVICE] Reading Blueprint from Database...");
                 AnalysisJob analysisJob = analysisJobRepository.findById(analysisJobId)
@@ -60,9 +65,12 @@ public class TerraformService {
                     throw new RuntimeException("Blueprint JSON is empty in database.");
                 }
 
+                String repoName = analysisJob.getRepositoryName();
+
                 JsonNode rootNode = objectMapper.readTree(blueprintJson);
                 String computeType = rootNode.path("computeType").asText("Managed Container");
 
+                // --- PROMPTS (Χωρίς καμία αλλαγή) ---
                 String promptNoAnsible = String.format("""
                     You are a Principal Cloud Architect and Terraform Expert specialized in Container Orchestration and Serverless.
                     Your task is to generate PRODUCTION-READY Terraform code for a MANAGED CONTAINER/K8S deployment based on the blueprint.
@@ -134,9 +142,13 @@ public class TerraformService {
                     """, blueprintJson);
 
                 String selectedBasePrompt;
+                String sshPublicKey = null; // Μεταβλητή για το κλειδί
+
                 if ("Virtual Machine".equalsIgnoreCase(computeType)) {
                     selectedBasePrompt = promptYesAnsible;
                     System.out.println("🎯 [TF-SERVICE] Using VM-optimized prompt.");
+                    // ΝΕΟ: Δημιουργία κλειδιού στο Vault
+                    sshPublicKey = vaultService.createAndStoreSshKeyPair(userId, repoName, terraformJobId);
                 } else {
                     selectedBasePrompt = promptNoAnsible;
                     System.out.println("🎯 [TF-SERVICE] Using Container/K8S-optimized prompt.");
@@ -149,7 +161,6 @@ public class TerraformService {
                 int attempts = 0;
                 String lastError = "";
 
-                // --- ΛΟΓΙΚΗ VALIDATION & SELF-CORRECTION (Max 3 attempts) ---
                 while (!isValid && attempts < 3) {
                     attempts++;
                     String currentPrompt = (attempts == 1) ? finalPrompt :
@@ -159,11 +170,16 @@ public class TerraformService {
                     System.out.println("🧠 [TF-SERVICE] Calling Gemini - Attempt #" + attempts);
                     String aiResponse = chatModel.call(currentPrompt);
 
-                    // Καθαρισμός και Parsing
                     assert aiResponse != null;
                     tfFiles = parseAiResponse(aiResponse);
 
-                    // Εκτέλεση Terraform Validate
+                    // ΝΕΟ: Εγχυση του Public Key στο variables.tf πριν το validation
+                    if (sshPublicKey != null) {
+                        String currentVars = tfFiles.getOrDefault("variables.tf", "");
+                        String injectedVar = "\nvariable \"ssh_public_key\" { default = \"" + sshPublicKey + "\" }\n";
+                        tfFiles.put("variables.tf", currentVars + injectedVar);
+                    }
+
                     System.out.println("🔍 [TF-SERVICE] Validating code with Terraform CLI...");
                     ValidationResult result = performValidation(tfFiles);
 
@@ -180,7 +196,6 @@ public class TerraformService {
                     throw new RuntimeException("AI failed to generate valid Terraform after 3 attempts.");
                 }
 
-                // ΒΗΜΑ Δ: Δημιουργία ZIP και Αποθήκευση
                 System.out.println("📦 [TF-SERVICE] Packing valid files into ZIP...");
                 byte[] zipBytes = createZipInMemory(tfFiles);
 
@@ -196,7 +211,7 @@ public class TerraformService {
         });
     }
 
-    // --- ΒΟΗΘΗΤΙΚΕΣ ΜΕΘΟΔΟΙ ΓΙΑ ΤΟ VALIDATE ---
+    // --- ΒΟΗΘΗΤΙΚΕΣ ΜΕΘΟΔΟΙ (Παραμένουν ως έχουν) ---
 
     private Map<String, String> parseAiResponse(String response) {
         String clean = response.trim();
@@ -205,6 +220,7 @@ public class TerraformService {
         }
         Map<String, Object> raw = mapOutputConverter.convert(clean);
         Map<String, String> files = new HashMap<>();
+        assert raw != null;
         raw.forEach((k, v) -> files.put(k, String.valueOf(v)));
         return files;
     }
@@ -215,8 +231,6 @@ public class TerraformService {
             for (Map.Entry<String, String> entry : files.entrySet()) {
                 Files.writeString(tempDir.resolve(entry.getKey()), entry.getValue());
             }
-
-            // Terraform Init & Validate
             runCommand(tempDir, "terraform init -backend=false");
             String validateJson = runCommand(tempDir, "terraform validate -json");
 
@@ -234,27 +248,20 @@ public class TerraformService {
     private String runCommand(Path dir, String cmd) throws Exception {
         ProcessBuilder pb = new ProcessBuilder("sh", "-c", cmd);
         pb.directory(dir.toFile());
-
-        // Ανακατεύθυνση του Error Stream στο Input Stream για να τα διαβάζουμε όλα μαζί
         pb.redirectErrorStream(true);
-
         Process p = pb.start();
         StringBuilder output = new StringBuilder();
-
         try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
             String line;
             while ((line = r.readLine()) != null) {
                 output.append(line).append("\n");
-                // ΑΥΤΟ ΕΙΝΑΙ ΤΟ ΚΛΕΙΔΙ: Τυπώνει τη γραμμή στην κονσόλα του container
                 System.out.println("[TF-CLI] " + line);
             }
         }
-
         int exitCode = p.waitFor();
         if (exitCode != 0) {
             System.err.println("❌ Command '" + cmd + "' failed with exit code " + exitCode);
         }
-
         return output.toString();
     }
 

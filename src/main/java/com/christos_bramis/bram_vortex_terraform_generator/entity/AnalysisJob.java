@@ -13,6 +13,9 @@ public class AnalysisJob {
     @Column(name = "job_id", insertable = false, updatable = false)
     private String jobId;
 
+    @Column(name = "repository_name", insertable = false, updatable = false)
+    private String repositoryName;
+
     // Εδώ είναι το μόνο πεδίο που μας νοιάζει να διαβάσουμε!
     @Column(name = "blueprint_json", columnDefinition = "jsonb", insertable = false, updatable = false)
     private String blueprintJson;
@@ -20,4 +23,5 @@ public class AnalysisJob {
     // Βάζουμε ΜΟΝΟ Getters. Καθόλου Setters για να είναι 100% Read-Only!
     public String getJobId() { return jobId; }
     public String getBlueprintJson() { return blueprintJson; }
+    public String getRepositoryName() { return repositoryName; }
 }
