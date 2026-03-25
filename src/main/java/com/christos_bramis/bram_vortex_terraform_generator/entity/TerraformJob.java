@@ -1,29 +1,27 @@
 package com.christos_bramis.bram_vortex_terraform_generator.entity;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import jakarta.persistence.*;
 
 @Entity
-@Table(name = "terraform_jobs") // Ο δικός του, ανεξάρτητος πίνακας
+@Table(name = "terraform_jobs")
 public class TerraformJob {
 
     @Id
-    private String id; // Το ID αυτού του Terraform Job
+    private String id;
 
     @Column(name = "analysis_job_id", nullable = false)
-    private String analysisJobId; // Κρατάμε το ID της ανάλυσης για reference
+    private String analysisJobId;
 
+    @Column(name = "user_id") // Ρητή δήλωση για να ταιριάζει με την Postgres
     private String userId;
 
-    private String status; // π.χ. GENERATING, COMPLETED, FAILED
+    private String status;
 
-    // ΕΔΩ ΕΙΝΑΙ Η ΜΑΓΕΙΑ: Η Postgres θα το κάνει BYTEA (BLOB)
+    @Lob // Δηλώνει ότι είναι μεγάλο αρχείο (Binary)
     @Column(name = "terraform_zip")
     private byte[] terraformZip;
 
-    // --- Getters & Setters ---
+    // --- Getters & Setters (Παραμένουν ως έχουν) ---
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 

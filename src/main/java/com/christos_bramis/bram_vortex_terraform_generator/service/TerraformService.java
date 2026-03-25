@@ -18,7 +18,6 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -30,12 +29,12 @@ public class TerraformService {
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
     private final MapOutputConverter mapOutputConverter;
-    private final VaultService vaultService; // ΝΕΟ: Προσθήκη VaultService
+    private final VaultService vaultService;
 
     public TerraformService(TerraformJobRepository terraformJobRepository,
                             AnalysisJobRepository analysisJobRepository,
                             ChatModel chatModel,
-                            VaultService vaultService) { // Ενημέρωση Constructor
+                            VaultService vaultService) {
         this.terraformJobRepository = terraformJobRepository;
         this.analysisJobRepository = analysisJobRepository;
         this.chatModel = chatModel;
@@ -60,17 +59,18 @@ public class TerraformService {
                 AnalysisJob analysisJob = analysisJobRepository.findById(analysisJobId)
                         .orElseThrow(() -> new RuntimeException("Analysis blueprint not found for ID: " + analysisJobId));
 
-                String blueprintJson = analysisJob.getBlueprintJson();
-                if (blueprintJson == null || blueprintJson.isEmpty()) {
+                // ΑΛΛΑΓΗ: Παίρνουμε το JsonNode απευθείας (JSONB mapping)
+                JsonNode blueprintNode = analysisJob.getBlueprintJson();
+                if (blueprintNode == null || blueprintNode.isNull()) {
                     throw new RuntimeException("Blueprint JSON is empty in database.");
                 }
 
+                // Μετατροπή σε String για χρήση στα prompts
+                String blueprintJsonString = blueprintNode.toPrettyString();
                 String repoName = analysisJob.getRepositoryName();
+                String computeType = blueprintNode.path("computeType").asText("Managed Container");
 
-                JsonNode rootNode = objectMapper.readTree(blueprintJson);
-                String computeType = rootNode.path("computeType").asText("Managed Container");
-
-                // --- PROMPTS (Χωρίς καμία αλλαγή) ---
+                // --- PROMPTS (Χωρίς καμία αλλαγή στο κείμενο) ---
                 String promptNoAnsible = String.format("""
                     You are a Principal Cloud Architect and Terraform Expert specialized in Container Orchestration and Serverless.
                     Your task is to generate PRODUCTION-READY Terraform code for a MANAGED CONTAINER/K8S deployment based on the blueprint.
@@ -103,7 +103,7 @@ public class TerraformService {
                         "outputs.tf": "<raw terraform code>",
                         "providers.tf": "<raw terraform code>"
                     }
-                    """, blueprintJson);
+                    """, blueprintJsonString);
 
                 String promptYesAnsible = String.format("""
                     You are a Principal Cloud Architect and Terraform Expert specialized in Infrastructure-as-Service (IaaS).
@@ -139,15 +139,14 @@ public class TerraformService {
                       "outputs.tf": "<raw terraform code>",
                       "providers.tf": "<raw terraform code>"
                     }
-                    """, blueprintJson);
+                    """, blueprintJsonString);
 
                 String selectedBasePrompt;
-                String sshPublicKey = null; // Μεταβλητή για το κλειδί
+                String sshPublicKey = null;
 
                 if ("Virtual Machine".equalsIgnoreCase(computeType)) {
                     selectedBasePrompt = promptYesAnsible;
                     System.out.println("🎯 [TF-SERVICE] Using VM-optimized prompt.");
-                    // ΝΕΟ: Δημιουργία κλειδιού στο Vault
                     sshPublicKey = vaultService.createAndStoreSshKeyPair(userId, repoName, terraformJobId);
                 } else {
                     selectedBasePrompt = promptNoAnsible;
@@ -173,7 +172,6 @@ public class TerraformService {
                     assert aiResponse != null;
                     tfFiles = parseAiResponse(aiResponse);
 
-                    // ΝΕΟ: Εγχυση του Public Key στο variables.tf πριν το validation
                     if (sshPublicKey != null) {
                         String currentVars = tfFiles.getOrDefault("variables.tf", "");
                         String injectedVar = "\nvariable \"ssh_public_key\" { default = \"" + sshPublicKey + "\" }\n";
@@ -210,8 +208,6 @@ public class TerraformService {
             }
         });
     }
-
-    // --- ΒΟΗΘΗΤΙΚΕΣ ΜΕΘΟΔΟΙ (Παραμένουν ως έχουν) ---
 
     private Map<String, String> parseAiResponse(String response) {
         String clean = response.trim();
@@ -255,13 +251,9 @@ public class TerraformService {
             String line;
             while ((line = r.readLine()) != null) {
                 output.append(line).append("\n");
-                System.out.println("[TF-CLI] " + line);
             }
         }
-        int exitCode = p.waitFor();
-        if (exitCode != 0) {
-            System.err.println("❌ Command '" + cmd + "' failed with exit code " + exitCode);
-        }
+        p.waitFor();
         return output.toString();
     }
 
