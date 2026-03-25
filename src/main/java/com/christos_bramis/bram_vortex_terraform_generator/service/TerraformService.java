@@ -10,7 +10,11 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.converter.MapOutputConverter;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStreamReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.zip.ZipEntry;
@@ -20,9 +24,10 @@ import java.util.zip.ZipOutputStream;
 public class TerraformService {
 
     private final TerraformJobRepository terraformJobRepository;
-    private final AnalysisJobRepository analysisJobRepository; // Read-only repo για το blueprint
+    private final AnalysisJobRepository analysisJobRepository;
     private final ChatModel chatModel;
-    private final ObjectMapper objectMapper; // Jackson για το JSON parsing
+    private final ObjectMapper objectMapper;
+    private final MapOutputConverter mapOutputConverter; // Προσθήκη για επαναχρησιμοποίηση
 
     public TerraformService(TerraformJobRepository terraformJobRepository,
                             AnalysisJobRepository analysisJobRepository,
@@ -31,12 +36,12 @@ public class TerraformService {
         this.analysisJobRepository = analysisJobRepository;
         this.chatModel = chatModel;
         this.objectMapper = new ObjectMapper();
+        this.mapOutputConverter = new MapOutputConverter();
     }
 
     public void generateAndSaveTerraform(String terraformJobId, String analysisJobId, String userId) {
         System.out.println("🚀 [TF-SERVICE] Starting generation for TF Job: " + terraformJobId);
 
-        // 1. Αρχικοποίηση του Terraform Job στη Βάση
         TerraformJob job = new TerraformJob();
         job.setId(terraformJobId);
         job.setAnalysisJobId(analysisJobId);
@@ -44,28 +49,20 @@ public class TerraformService {
         job.setStatus("GENERATING");
         terraformJobRepository.save(job);
 
-        // 2. Ασύγχρονη Εκτέλεση
         java.util.concurrent.CompletableFuture.runAsync(() -> {
             try {
-                // ΒΗΜΑ Α: Ανάγνωση Blueprint απευθείας από τη Βάση
                 System.out.println("🔍 [TF-SERVICE] Reading Blueprint from Database...");
-
                 AnalysisJob analysisJob = analysisJobRepository.findById(analysisJobId)
                         .orElseThrow(() -> new RuntimeException("Analysis blueprint not found for ID: " + analysisJobId));
 
                 String blueprintJson = analysisJob.getBlueprintJson();
-
                 if (blueprintJson == null || blueprintJson.isEmpty()) {
                     throw new RuntimeException("Blueprint JSON is empty in database.");
                 }
 
-                // Εξαγωγή του computeType από το JSON string χωρίς αλλαγή στο Entity
                 JsonNode rootNode = objectMapper.readTree(blueprintJson);
                 String computeType = rootNode.path("computeType").asText("Managed Container");
 
-                System.out.println("🎯 [TF-SERVICE] Detected Compute Type: " + computeType);
-
-                // ΒΗΜΑ Β: Ορισμός των Prompts
                 String promptNoAnsible = String.format("""
                     You are a Principal Cloud Architect and Terraform Expert specialized in Container Orchestration and Serverless.
                     Your task is to generate PRODUCTION-READY Terraform code for a MANAGED CONTAINER/K8S deployment based on the blueprint.
@@ -136,13 +133,10 @@ public class TerraformService {
                     }
                     """, blueprintJson);
 
-                // ΒΗΜΑ Γ: Επιλογή Prompt και Κλήση στο Gemini
-                var mapOutputConverter = new MapOutputConverter();
                 String selectedBasePrompt;
-
                 if ("Virtual Machine".equalsIgnoreCase(computeType)) {
                     selectedBasePrompt = promptYesAnsible;
-                    System.out.println("🎯 [TF-SERVICE] Using VM-optimized prompt (Ansible-ready).");
+                    System.out.println("🎯 [TF-SERVICE] Using VM-optimized prompt.");
                 } else {
                     selectedBasePrompt = promptNoAnsible;
                     System.out.println("🎯 [TF-SERVICE] Using Container/K8S-optimized prompt.");
@@ -150,40 +144,123 @@ public class TerraformService {
 
                 String finalPrompt = selectedBasePrompt + "\n\n" + mapOutputConverter.getFormat();
 
-                System.out.println("🧠 [TF-SERVICE] Calling Gemini AI...");
-                String aiResponse = chatModel.call(finalPrompt);
-
-                // Καθαρισμός του string από πιθανά Markdown backticks
-                String cleanResponse = aiResponse.trim();
-                if (cleanResponse.startsWith("```")) {
-                    cleanResponse = cleanResponse.replaceAll("^```json\\s*", "").replaceAll("```$", "").trim();
-                }
-
-                // Parsing με Spring AI Converter
-                Map<String, Object> tfFilesRaw = mapOutputConverter.convert(cleanResponse);
-
                 Map<String, String> tfFiles = new HashMap<>();
-                if (tfFilesRaw != null) {
-                    tfFilesRaw.forEach((k, v) -> tfFiles.put(k, String.valueOf(v)));
+                boolean isValid = false;
+                int attempts = 0;
+                String lastError = "";
+
+                // --- ΛΟΓΙΚΗ VALIDATION & SELF-CORRECTION (Max 3 attempts) ---
+                while (!isValid && attempts < 3) {
+                    attempts++;
+                    String currentPrompt = (attempts == 1) ? finalPrompt :
+                            "The previous Terraform code you generated had validation errors:\n" + lastError +
+                                    "\n\nPlease fix the code and return only the corrected JSON.";
+
+                    System.out.println("🧠 [TF-SERVICE] Calling Gemini - Attempt #" + attempts);
+                    String aiResponse = chatModel.call(currentPrompt);
+
+                    // Καθαρισμός και Parsing
+                    assert aiResponse != null;
+                    tfFiles = parseAiResponse(aiResponse);
+
+                    // Εκτέλεση Terraform Validate
+                    System.out.println("🔍 [TF-SERVICE] Validating code with Terraform CLI...");
+                    ValidationResult result = performValidation(tfFiles);
+
+                    if (result.valid) {
+                        isValid = true;
+                        System.out.println("✅ [TF-SERVICE] Code is VALID.");
+                    } else {
+                        lastError = result.errorOutput;
+                        System.err.println("⚠️ [TF-SERVICE] Validation Error: " + lastError);
+                    }
                 }
 
-                // ΒΗΜΑ Δ: Δημιουργία ZIP In-Memory
-                System.out.println("📦 [TF-SERVICE] Packing files into ZIP in-memory...");
+                if (!isValid) {
+                    throw new RuntimeException("AI failed to generate valid Terraform after 3 attempts.");
+                }
+
+                // ΒΗΜΑ Δ: Δημιουργία ZIP και Αποθήκευση
+                System.out.println("📦 [TF-SERVICE] Packing valid files into ZIP...");
                 byte[] zipBytes = createZipInMemory(tfFiles);
 
-                // ΒΗΜΑ Ε: Αποθήκευση στη Βάση
                 job.setTerraformZip(zipBytes);
                 job.setStatus("COMPLETED");
                 terraformJobRepository.save(job);
 
-                System.out.println("✅ [TF-SERVICE] Terraform generation COMPLETE for Job: " + terraformJobId);
-
             } catch (Exception e) {
-                System.err.println("❌ [TF-SERVICE ERROR] Failed to generate Terraform: " + e.getMessage());
+                System.err.println("❌ [TF-SERVICE ERROR]: " + e.getMessage());
                 job.setStatus("FAILED");
                 terraformJobRepository.save(job);
             }
         });
+    }
+
+    // --- ΒΟΗΘΗΤΙΚΕΣ ΜΕΘΟΔΟΙ ΓΙΑ ΤΟ VALIDATE ---
+
+    private Map<String, String> parseAiResponse(String response) {
+        String clean = response.trim();
+        if (clean.startsWith("```")) {
+            clean = clean.replaceAll("^```json\\s*", "").replaceAll("```$", "").trim();
+        }
+        Map<String, Object> raw = mapOutputConverter.convert(clean);
+        Map<String, String> files = new HashMap<>();
+        raw.forEach((k, v) -> files.put(k, String.valueOf(v)));
+        return files;
+    }
+
+    private ValidationResult performValidation(Map<String, String> files) {
+        try {
+            Path tempDir = Files.createTempDirectory("vortex-tf-");
+            for (Map.Entry<String, String> entry : files.entrySet()) {
+                Files.writeString(tempDir.resolve(entry.getKey()), entry.getValue());
+            }
+
+            // Terraform Init & Validate
+            runCommand(tempDir, "terraform init -backend=false");
+            String validateJson = runCommand(tempDir, "terraform validate -json");
+
+            JsonNode res = objectMapper.readTree(validateJson);
+            if (res.path("valid").asBoolean()) {
+                return new ValidationResult(true, null);
+            } else {
+                return new ValidationResult(false, validateJson);
+            }
+        } catch (Exception e) {
+            return new ValidationResult(false, e.getMessage());
+        }
+    }
+
+    private String runCommand(Path dir, String cmd) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder("sh", "-c", cmd);
+        pb.directory(dir.toFile());
+
+        // Ανακατεύθυνση του Error Stream στο Input Stream για να τα διαβάζουμε όλα μαζί
+        pb.redirectErrorStream(true);
+
+        Process p = pb.start();
+        StringBuilder output = new StringBuilder();
+
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                output.append(line).append("\n");
+                // ΑΥΤΟ ΕΙΝΑΙ ΤΟ ΚΛΕΙΔΙ: Τυπώνει τη γραμμή στην κονσόλα του container
+                System.out.println("[TF-CLI] " + line);
+            }
+        }
+
+        int exitCode = p.waitFor();
+        if (exitCode != 0) {
+            System.err.println("❌ Command '" + cmd + "' failed with exit code " + exitCode);
+        }
+
+        return output.toString();
+    }
+
+    private static class ValidationResult {
+        boolean valid; String errorOutput;
+        ValidationResult(boolean v, String e) { this.valid = v; this.errorOutput = e; }
     }
 
     private byte[] createZipInMemory(Map<String, String> files) throws Exception {

@@ -1,7 +1,6 @@
 # ===============================
 # 🏗️ STAGE 1: Build (Maven)
 # ===============================
-# Χρησιμοποιούμε εικόνα που έχει Maven ΚΑΙ Java 21
 FROM maven:3.9-eclipse-temurin-21 AS build
 
 WORKDIR /app
@@ -10,21 +9,32 @@ WORKDIR /app
 COPY pom.xml .
 COPY src ./src
 
-# Χτίζουμε το JAR (παραλείπουμε τα tests για ταχύτητα στο build)
+# Χτίζουμε το JAR (παραλείπουμε τα tests για ταχύτητα)
 RUN mvn clean package -DskipTests
 
 # ===============================
-# 🚀 STAGE 2: Run (Java Runtime)
+# 🚀 STAGE 2: Run (Java Runtime + Terraform CLI)
 # ===============================
-# Εδώ χρησιμοποιούμε την εικόνα που είχες κι εσύ (Runtime only)
 FROM eclipse-temurin:21-jdk-jammy
 
 LABEL authors="DaBram"
 
 WORKDIR /app
 
-# Μαγεία: Παίρνουμε το JAR από το Stage 1 και το μετονομάζουμε σε app.jar
-# Έτσι δεν σε νοιάζει αν αλλάξει το version στο pom.xml (0.0.1 -> 0.0.2)
+# --- Εγκατάσταση Terraform CLI ---
+# Απαραίτητα εργαλεία για την προσθήκη του HashiCorp Repo
+RUN apt-get update && apt-get install -y curl gnupg software-properties-common
+
+# Προσθήκη του GPG key και του επίσημου repository της HashiCorp
+RUN curl -fsSL https://apt.releases.hashicorp.com/gpg | apt-key add - && \
+    apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+
+# Εγκατάσταση της Terraform
+RUN apt-get update && apt-get install -y terraform && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# --- Αντιγραφή του Artifact ---
+# Παίρνουμε το JAR από το Stage 1
 COPY --from=build /app/target/*.jar app.jar
 
 # Τρέχουμε το app
