@@ -10,9 +10,9 @@ jobs:
     uses: DBramC/Bram-Vortex/.github/workflows/gitops-pipeline.yml@main
     with:
       # Το όνομα που θα έχει η εικόνα στο DockerHub
-      image_name: christosbramis/bram-vortex-terraform-generator
+      image_name: christosbramis/bram-vortex-ansible-generator
       # Πού βρίσκεται το YAML μέσα στο κεντρικό repo (Bram-Vortex)
-      manifest_path: k8s/Terraform-Generator/terraform-generator-deployment.yaml
+      manifest_path: k8s/Ansible-Generator/ansible-generator-deployment.yaml
 
     # Αυτό δίνει πρόσβαση στα secrets που μόλις έφτιαξες
     secrets: inherit
