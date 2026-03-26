@@ -59,18 +59,16 @@ public class TerraformService {
                 AnalysisJob analysisJob = analysisJobRepository.findById(analysisJobId)
                         .orElseThrow(() -> new RuntimeException("Analysis blueprint not found for ID: " + analysisJobId));
 
-                // ΑΛΛΑΓΗ: Παίρνουμε το JsonNode απευθείας (JSONB mapping)
                 JsonNode blueprintNode = analysisJob.getBlueprintJson();
                 if (blueprintNode == null || blueprintNode.isNull()) {
                     throw new RuntimeException("Blueprint JSON is empty in database.");
                 }
 
-                // Μετατροπή σε String για χρήση στα prompts
                 String blueprintJsonString = blueprintNode.toPrettyString();
                 String repoName = analysisJob.getRepositoryName();
                 String computeType = blueprintNode.path("computeType").asText("Managed Container");
 
-                // --- PROMPTS (Χωρίς καμία αλλαγή στο κείμενο) ---
+                // --- PROMPTS ---
                 String promptNoAnsible = String.format("""
                     You are a Principal Cloud Architect and Terraform Expert specialized in Container Orchestration and Serverless.
                     Your task is to generate PRODUCTION-READY Terraform code for a MANAGED CONTAINER/K8S deployment based on the blueprint.
@@ -113,7 +111,7 @@ public class TerraformService {
                     %s
                     --------------------------------------
 
-                    ENGINEERING REQUIREMENTS & BEST PRACTICES:
+                    ENGINEERING REQUIREMENTS & BEST Practices:
                     1. **Providers (`providers.tf`)**: Configure the correct cloud provider and region based on the blueprint.
                     2. **Variables (`variables.tf`)**: 
                        - Extract configurations like instance sizes, ports, and env vars.
@@ -155,31 +153,52 @@ public class TerraformService {
 
                 String finalPrompt = selectedBasePrompt + "\n\n" + mapOutputConverter.getFormat();
 
-                Map<String, String> tfFiles = new HashMap<>();
+                Map<String, String> finalTfFiles = new HashMap<>(); // Η "μνήμη" μας
                 boolean isValid = false;
                 int attempts = 0;
                 String lastError = "";
 
                 while (!isValid && attempts < 3) {
                     attempts++;
-                    String currentPrompt = (attempts == 1) ? finalPrompt :
-                            "The previous Terraform code you generated had validation errors:\n" + lastError +
-                                    "\n\nPlease fix the code and return only the corrected JSON.";
+
+                    String currentPrompt;
+                    if (attempts == 1) {
+                        currentPrompt = finalPrompt;
+                    } else {
+                        // Στο retry, του θυμίζουμε ΤΙ θέλουμε (Schema) και του λέμε να στείλει ΟΛΑ τα αρχεία.
+                        currentPrompt = "The previous Terraform code you generated had validation errors:\n" + lastError +
+                                "\n\nPlease fix the code and return a SINGLE, VALID JSON object containing ALL files." +
+                                "\n\nCRITICAL: You MUST include 'main.tf', 'variables.tf', 'outputs.tf', and 'providers.tf' in your response. Do not send partial updates." +
+                                "\n\n" + mapOutputConverter.getFormat();
+                    }
 
                     System.out.println("🧠 [TF-SERVICE] Calling Gemini - Attempt #" + attempts);
                     String aiResponse = chatModel.call(currentPrompt);
 
                     assert aiResponse != null;
-                    tfFiles = parseAiResponse(aiResponse);
+                    Map<String, String> newFiles = parseAiResponse(aiResponse);
 
-                    if (sshPublicKey != null) {
-                        String currentVars = tfFiles.getOrDefault("variables.tf", "");
-                        String injectedVar = "\nvariable \"ssh_public_key\" { default = \"" + sshPublicKey + "\" }\n";
-                        tfFiles.put("variables.tf", currentVars + injectedVar);
+                    // ΑΝΤΙ ΝΑ ΔΙΑΓΡΑΦΟΥΜΕ ΤΑ ΠΑΛΙΑ ΑΡΧΕΙΑ, ΤΑ ΚΑΝΟΥΜΕ MERGE
+                    finalTfFiles.putAll(newFiles);
+
+                    // Αν είναι VM, σιγουρευόμαστε ότι το κλειδί SSH δεν χάθηκε στο Merge
+                    if (sshPublicKey != null && finalTfFiles.containsKey("variables.tf")) {
+                        String currentVars = finalTfFiles.get("variables.tf");
+                        if (!currentVars.contains("ssh_public_key")) {
+                            String injectedVar = "\nvariable \"ssh_public_key\" { default = \"" + sshPublicKey + "\" }\n";
+                            finalTfFiles.put("variables.tf", currentVars + injectedVar);
+                        }
+                    }
+
+                    // Ελέγχουμε αν όντως έχουμε όλα τα βασικά αρχεία, αλλιώς κάτι πήγε πολύ στραβά
+                    if (!finalTfFiles.containsKey("main.tf") || !finalTfFiles.containsKey("providers.tf")) {
+                        lastError = "Missing critical files (main.tf or providers.tf) in the JSON response.";
+                        System.err.println("⚠️ [TF-SERVICE] Validation Error: " + lastError);
+                        continue;
                     }
 
                     System.out.println("🔍 [TF-SERVICE] Validating code with Terraform CLI...");
-                    ValidationResult result = performValidation(tfFiles);
+                    ValidationResult result = performValidation(finalTfFiles);
 
                     if (result.valid) {
                         isValid = true;
@@ -191,11 +210,11 @@ public class TerraformService {
                 }
 
                 if (!isValid) {
-                    throw new RuntimeException("AI failed to generate valid Terraform after 3 attempts.");
+                    throw new RuntimeException("AI failed to generate valid Terraform after 3 attempts. Last error: " + lastError);
                 }
 
                 System.out.println("📦 [TF-SERVICE] Packing valid files into ZIP...");
-                byte[] zipBytes = createZipInMemory(tfFiles);
+                byte[] zipBytes = createZipInMemory(finalTfFiles);
 
                 job.setTerraformZip(zipBytes);
                 job.setStatus("COMPLETED");
@@ -208,7 +227,6 @@ public class TerraformService {
             }
         });
     }
-
     private Map<String, String> parseAiResponse(String response) {
         String clean = response.trim();
         if (clean.startsWith("```")) {

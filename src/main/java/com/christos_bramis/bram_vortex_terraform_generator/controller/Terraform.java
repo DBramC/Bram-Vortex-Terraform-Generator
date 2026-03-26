@@ -63,21 +63,31 @@ public class Terraform {
         // Χρησιμοποιούμε μια μέθοδο στο repository για να βρούμε το job βάσει analysisJobId
         return terraformJobRepository.findByAnalysisJobId(analysisJobId)
                 .map(job -> {
+                    // 1. SECURITY CHECK: Ανήκει το Job σε αυτόν τον χρήστη;
                     if (!job.getUserId().equals(userId)) {
+                        System.err.println("🚫 [SECURITY] Unauthorized download attempt by user: " + userId);
                         return ResponseEntity.status(HttpStatus.FORBIDDEN).<byte[]>build();
                     }
 
-                    if (!"COMPLETED".equals(job.getStatus()) || job.getTerraformZip() == null) {
+                    // 2. STATUS & CONTENT CHECK: Είναι έτοιμο ΚΑΙ έχει πραγματικά δεδομένα;
+                    // Αν το status δεν είναι COMPLETED, ή το zip είναι null, ή το zip είναι άδειο (0 bytes)
+                    if (!"COMPLETED".equals(job.getStatus()) || job.getTerraformZip() == null || job.getTerraformZip().length == 0) {
+                        System.out.println("⏳ [TF CONTROLLER] Generation not finished or file empty for Job: " + analysisJobId);
+                        // Επιστρέφουμε 202 ACCEPTED (Σημαίνει: Το έλαβα αλλά επεξεργάζεται ακόμα)
                         return ResponseEntity.status(HttpStatus.ACCEPTED).<byte[]>build();
                     }
 
+                    // 3. SUCCESS: Κατέβασμα του αρχείου
+                    System.out.println("✅ [TF CONTROLLER] Sending ZIP file for Job: " + analysisJobId);
                     HttpHeaders headers = new HttpHeaders();
                     headers.setContentType(MediaType.parseMediaType("application/zip"));
                     headers.setContentDispositionFormData("attachment", "vortex-terraform-" + analysisJobId + ".zip");
+                    // Αποτροπή caching για να παίρνει πάντα την πιο πρόσφατη έκδοση
+                    headers.setCacheControl("must-revalidate, post-check=0, pre-check=0");
 
                     return new ResponseEntity<>(job.getTerraformZip(), headers, HttpStatus.OK);
                 })
-                .orElse(ResponseEntity.notFound().build());
+                .orElse(ResponseEntity.notFound().build()); // Αν δεν βρεθεί καν στη βάση, 404
     }
 
     /**
