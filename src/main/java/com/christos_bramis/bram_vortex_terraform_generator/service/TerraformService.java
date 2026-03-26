@@ -142,7 +142,7 @@ public class TerraformService {
                 String selectedBasePrompt;
                 String sshPublicKey = null;
 
-                if ("Virtual Machine".equalsIgnoreCase(computeType)) {
+                if ("VM".equalsIgnoreCase(computeType)) {
                     selectedBasePrompt = promptYesAnsible;
                     System.out.println("🎯 [TF-SERVICE] Using VM-optimized prompt.");
                     sshPublicKey = vaultService.createAndStoreSshKeyPair(userId, repoName, terraformJobId);
