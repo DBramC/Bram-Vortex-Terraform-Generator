@@ -7,6 +7,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -18,28 +19,29 @@ public class Terraform {
     private final TerraformService terraformService;
     private final TerraformJobRepository terraformJobRepository;
 
-    // Constructor Injection για τα απαραίτητα beans
     public Terraform(TerraformService terraformService, TerraformJobRepository terraformJobRepository) {
         this.terraformService = terraformService;
         this.terraformJobRepository = terraformJobRepository;
     }
 
     /**
-     * Endpoint που δέχεται το Webhook από τον Repo Analyzer.
-     * Ξεκινάει την επικοινωνία με το AI και τη δημιουργία του ZIP.
+     * Endpoint Webhook - Δέχεται το αίτημα από τον Analyzer.
+     * Το userId προκύπτει από το JWT Token που μεταφέρθηκε (Token Propagation).
      */
     @PostMapping("/generate/{analysisJobId}")
-    public ResponseEntity<String> generateTerraform(@PathVariable String analysisJobId, @RequestParam String userId) {
-        System.out.println("🚀 [CONTROLLER] Webhook received from Analyzer for Job: " + analysisJobId);
+    public ResponseEntity<String> generateTerraform(
+            @PathVariable String analysisJobId,
+            Authentication auth) { // <--- Λήψη από το Security Context
+
+        String userId = auth.getName();
+        System.out.println("🚀 [TF CONTROLLER] Webhook received for Job: " + analysisJobId + " from User: " + userId);
 
         try {
-            // Δημιουργούμε ένα μοναδικό ID για τη συγκεκριμένη παραγωγή Terraform
             String terraformJobId = UUID.randomUUID().toString();
 
-            // Καλούμε το Service (το οποίο τρέχει Async, οπότε δεν μπλοκάρουμε τον Analyzer)
+            // Καλούμε το Service χρησιμοποιώντας την έγκυρη ταυτότητα του χρήστη
             terraformService.generateAndSaveTerraform(terraformJobId, analysisJobId, userId);
 
-            // Επιστρέφουμε το ID στον Analyzer (ή στο frontend) για να ξέρουν πώς να το αναζητήσουν
             return ResponseEntity.ok(terraformJobId);
         } catch (Exception e) {
             System.err.println("❌ [CONTROLLER ERROR]: " + e.getMessage());
@@ -48,27 +50,29 @@ public class Terraform {
     }
 
     /**
-     * Endpoint για το κατέβασμα του παραγόμενου ZIP από τον χρήστη.
+     * Endpoint για Download.
+     * Προστατεύεται από το JWT: Μόνο ο ιδιοκτήτης του Job μπορεί να κατεβάσει το αρχείο.
      */
     @GetMapping("/download/{terraformJobId}")
-    public ResponseEntity<byte[]> downloadTerraform(@PathVariable String terraformJobId, @RequestParam String userId) {
-        System.out.println("📦 [CONTROLLER] Download request for TF Job: " + terraformJobId);
+    public ResponseEntity<byte[]> downloadTerraform(
+            @PathVariable String terraformJobId,
+            Authentication auth) {
 
-        // 1. Αναζήτηση στη βάση
+        String userId = auth.getName();
+        System.out.println("📦 [TF CONTROLLER] Download request for Job: " + terraformJobId + " by User: " + userId);
+
         return terraformJobRepository.findById(terraformJobId)
                 .map(job -> {
-                    // 2. SECURITY CHECK: Ανήκει αυτό το Job στον χρήστη που το ζητάει;
+                    // SECURITY CHECK: Διασταύρωση userId από τη βάση με το userId από το Token
                     if (!job.getUserId().equals(userId)) {
-                        System.err.println("🚫 [SECURITY] User " + userId + " tried to access unauthorized job: " + terraformJobId);
+                        System.err.println("🚫 [SECURITY] Unauthorized download attempt by user: " + userId);
                         return ResponseEntity.status(HttpStatus.FORBIDDEN).<byte[]>build();
                     }
 
-                    // 3. CHECK STATUS: Είναι έτοιμο το αρχείο;
                     if (!"COMPLETED".equals(job.getStatus()) || job.getTerraformZip() == null) {
-                        return ResponseEntity.status(HttpStatus.ACCEPTED).<byte[]>build(); // 202 Accepted (σημαίνει "ακόμα δουλεύω")
+                        return ResponseEntity.status(HttpStatus.ACCEPTED).<byte[]>build();
                     }
 
-                    // 4. PREPARE DOWNLOAD: Φτιάχνουμε τα headers για τον browser
                     HttpHeaders headers = new HttpHeaders();
                     headers.setContentType(MediaType.parseMediaType("application/zip"));
                     headers.setContentDispositionFormData("attachment", "vortex-terraform-" + terraformJobId + ".zip");
@@ -80,12 +84,19 @@ public class Terraform {
     }
 
     /**
-     * Προαιρετικό: Endpoint για να βλέπει το frontend το status (GENERATING, COMPLETED, FAILED)
+     * Endpoint για το Status.
+     * Επιστρέφει την κατάσταση (GENERATING, COMPLETED, κτλ) στον ιδιοκτήτη.
      */
     @GetMapping("/status/{terraformJobId}")
-    public ResponseEntity<String> getStatus(@PathVariable String terraformJobId) {
+    public ResponseEntity<String> getStatus(@PathVariable String terraformJobId, Authentication auth) {
+        String userId = auth.getName();
         return terraformJobRepository.findById(terraformJobId)
-                .map(job -> ResponseEntity.ok(job.getStatus()))
+                .map(job -> {
+                    if (!job.getUserId().equals(userId)) {
+                        return ResponseEntity.status(HttpStatus.FORBIDDEN).<String>build();
+                    }
+                    return ResponseEntity.ok(job.getStatus());
+                })
                 .orElse(ResponseEntity.notFound().build());
     }
 }

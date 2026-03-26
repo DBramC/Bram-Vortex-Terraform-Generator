@@ -48,8 +48,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (publicKey != null && authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7);
             try {
-                // ΕΠΑΛΗΘΕΥΣΗ: Το setSigningKey(publicKey) εγγυάται ότι το token
-                // υπογράφηκε από το Auth Service μας.
+                // Επαλήθευση υπογραφής με το RSA Public Key
                 Claims claims = Jwts.parserBuilder()
                         .setSigningKey(publicKey)
                         .build()
@@ -58,8 +57,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
                 String userId = claims.getSubject();
 
+                /* * Η ΚΡΙΣΙΜΗ ΑΛΛΑΓΗ:
+                 * Αποθηκεύουμε το token στα credentials αντί για null.
+                 * Αυτό επιτρέπει στο service να "θυμάται" το JWT του χρήστη
+                 * για τυχόν μελλοντικές κλήσεις σε άλλα services.
+                 */
                 UsernamePasswordAuthenticationToken auth =
-                        new UsernamePasswordAuthenticationToken(userId, null, Collections.emptyList());
+                        new UsernamePasswordAuthenticationToken(userId, token, Collections.emptyList());
+
                 SecurityContextHolder.getContext().setAuthentication(auth);
 
             } catch (Exception e) {
