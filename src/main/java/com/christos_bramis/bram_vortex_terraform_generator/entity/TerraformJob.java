@@ -1,6 +1,8 @@
 package com.christos_bramis.bram_vortex_terraform_generator.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "terraform_jobs")
@@ -21,7 +23,7 @@ public class TerraformJob {
     private String status;
 
     // Το bytea είναι ο σωστός τύπος για ZIP/Binary αρχεία στην Postgres
-    @Lob
+    @JdbcTypeCode(SqlTypes.BINARY)
     @Column(name = "terraform_zip", columnDefinition = "bytea")
     private byte[] terraformZip;
 
