@@ -17,8 +17,7 @@ public class TerraformJob {
 
     private String status;
 
-    @Lob // Δηλώνει ότι είναι μεγάλο αρχείο (Binary)
-    @Column(name = "terraform_zip")
+    @Column(name = "terraform_zip", columnDefinition = "bytea")
     private byte[] terraformZip;
 
     // --- Getters & Setters (Παραμένουν ως έχουν) ---
