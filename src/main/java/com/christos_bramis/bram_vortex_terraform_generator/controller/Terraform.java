@@ -53,19 +53,17 @@ public class Terraform {
      * Endpoint για Download.
      * Προστατεύεται από το JWT: Μόνο ο ιδιοκτήτης του Job μπορεί να κατεβάσει το αρχείο.
      */
-    @GetMapping("/download/{terraformJobId}")
-    public ResponseEntity<byte[]> downloadTerraform(
-            @PathVariable String terraformJobId,
+    @GetMapping("/download/by-analysis/{analysisJobId}")
+    public ResponseEntity<byte[]> downloadByAnalysisId(
+            @PathVariable String analysisJobId,
             Authentication auth) {
 
         String userId = auth.getName();
-        System.out.println("📦 [TF CONTROLLER] Download request for Job: " + terraformJobId + " by User: " + userId);
 
-        return terraformJobRepository.findById(terraformJobId)
+        // Χρησιμοποιούμε μια μέθοδο στο repository για να βρούμε το job βάσει analysisJobId
+        return terraformJobRepository.findByAnalysisJobId(analysisJobId)
                 .map(job -> {
-                    // SECURITY CHECK: Διασταύρωση userId από τη βάση με το userId από το Token
                     if (!job.getUserId().equals(userId)) {
-                        System.err.println("🚫 [SECURITY] Unauthorized download attempt by user: " + userId);
                         return ResponseEntity.status(HttpStatus.FORBIDDEN).<byte[]>build();
                     }
 
@@ -75,8 +73,7 @@ public class Terraform {
 
                     HttpHeaders headers = new HttpHeaders();
                     headers.setContentType(MediaType.parseMediaType("application/zip"));
-                    headers.setContentDispositionFormData("attachment", "vortex-terraform-" + terraformJobId + ".zip");
-                    headers.setCacheControl("must-revalidate, post-check=0, pre-check=0");
+                    headers.setContentDispositionFormData("attachment", "vortex-terraform-" + analysisJobId + ".zip");
 
                     return new ResponseEntity<>(job.getTerraformZip(), headers, HttpStatus.OK);
                 })

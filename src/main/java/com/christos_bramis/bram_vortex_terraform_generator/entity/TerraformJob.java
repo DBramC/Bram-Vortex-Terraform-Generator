@@ -7,20 +7,35 @@ import jakarta.persistence.*;
 public class TerraformJob {
 
     @Id
+    @Column(name = "id")
     private String id;
 
+    // Προσθέτουμε nullable = false γιατί κάθε TF job πρέπει να συνδέεται με μια ανάλυση
     @Column(name = "analysis_job_id", nullable = false)
     private String analysisJobId;
 
-    @Column(name = "user_id") // Ρητή δήλωση για να ταιριάζει με την Postgres
+    @Column(name = "user_id", nullable = false)
     private String userId;
 
+    @Column(name = "status")
     private String status;
 
+    // Το bytea είναι ο σωστός τύπος για ZIP/Binary αρχεία στην Postgres
+    @Lob
     @Column(name = "terraform_zip", columnDefinition = "bytea")
     private byte[] terraformZip;
 
-    // --- Getters & Setters (Παραμένουν ως έχουν) ---
+    // --- Constructors ---
+    public TerraformJob() {}
+
+    public TerraformJob(String id, String analysisJobId, String userId, String status) {
+        this.id = id;
+        this.analysisJobId = analysisJobId;
+        this.userId = userId;
+        this.status = status;
+    }
+
+    // --- Getters & Setters ---
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
