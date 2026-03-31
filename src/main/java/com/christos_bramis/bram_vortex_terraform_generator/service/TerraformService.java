@@ -68,6 +68,7 @@ public class TerraformService {
                 String repoName = analysisJob.getRepositoryName();
                 String computeType = blueprintNode.path("computeType").asText("Managed Container");
 
+
                 // --- PROMPTS ---
                 String promptNoAnsible = String.format("""
                     You are a Principal Cloud Architect and Terraform Expert specialized in Container Orchestration and Serverless.
@@ -144,11 +145,11 @@ public class TerraformService {
 
                 if ("VM".equalsIgnoreCase(computeType)) {
                     selectedBasePrompt = promptYesAnsible;
-                    System.out.println("🎯 [TF-SERVICE] Using VM-optimized prompt.");
+                    System.out.println("🎯 [TF-SERVICE] "+ computeType + " Using VM-optimized prompt.");
                     sshPublicKey = vaultService.createAndStoreSshKeyPair(userId, repoName, terraformJobId);
                 } else {
                     selectedBasePrompt = promptNoAnsible;
-                    System.out.println("🎯 [TF-SERVICE] Using Container/K8S-optimized prompt.");
+                    System.out.println("🎯 [TF-SERVICE] "+ computeType + " Using Container/K8S-optimized prompt.");
                 }
 
                 String finalPrompt = selectedBasePrompt + "\n\n" + mapOutputConverter.getFormat();
