@@ -66,8 +66,7 @@ public class TerraformService {
 
                 String blueprintJsonString = blueprintNode.toPrettyString();
                 String repoName = analysisJob.getRepositoryName();
-                String computeType = String.valueOf(blueprintNode.path("computeType"));
-
+                String computeType = blueprintNode.path("targetCompute").asText();
 
                 // --- PROMPTS ---
                 String promptNoAnsible = String.format("""
