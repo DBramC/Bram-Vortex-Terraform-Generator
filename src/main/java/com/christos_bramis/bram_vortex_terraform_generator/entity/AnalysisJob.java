@@ -16,7 +16,7 @@ public class AnalysisJob {
     @Column(name = "job_id", insertable = false, updatable = false)
     private String jobId;
 
-    @Column(name = "repository_name", insertable = false, updatable = false)
+    @Column(name = "repo_name", insertable = false, updatable = false)
     private String repositoryName;
 
     @JdbcTypeCode(SqlTypes.JSON)

@@ -42,7 +42,7 @@ public class VaultService {
                     " vortex-generated-key-" + jobId;
 
             // 4. Αποθήκευση στο Vault
-            // Path: secret/users/{userId}/jobs/{jobId}
+            // Path: secret/users/{userId}/{repoName}/{jobId}
             String vaultPath = String.format("secret/users/%s/%s/%s", userId, repoName, jobId);
 
             System.out.println("🏦 [VAULT-SERVICE] Storing Private Key in Vault path: " + vaultPath);
