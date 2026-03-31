@@ -23,28 +23,23 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                // 1. Απενεργοποίηση CSRF (απαραίτητο για stateless REST APIs)
+                // 1. Προσθήκη CORS (Πρέπει να είναι πρώτο)
+                .cors(cors -> cors.configurationSource(request -> {
+                    var opt = new org.springframework.web.cors.CorsConfiguration();
+                    opt.setAllowedOrigins(java.util.List.of("http://localhost")); // Ή το domain σου
+                    opt.setAllowedMethods(java.util.List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+                    opt.setAllowedHeaders(java.util.List.of("*"));
+                    opt.setAllowCredentials(true);
+                    return opt;
+                }))
                 .csrf(AbstractHttpConfigurer::disable)
-
-                // 2. Stateless διαχείριση (δεν χρησιμοποιούμε sessions/cookies)
-                .sessionManagement(session -> session
-                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-                )
-
-                // 3. Ρύθμιση κανόνων πρόσβασης
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // Επιτρέπουμε το webhook από τον Analyzer (εσωτερική επικοινωνία)
+                        // Βεβαιώσου ότι τα paths εδώ ταιριάζουν με αυτά που στέλνει ο Kong
+                        .requestMatchers("/terraform/status/**", "/terraform/download/**").authenticated()
                         .requestMatchers("/terraform/generate/**").authenticated()
-
-                        // Τα endpoints για download και status απαιτούν έγκυρο JWT
-                        .requestMatchers("/terraform/download/**").authenticated()
-                        .requestMatchers("/terraform/status/**").authenticated()
-
-                        // Οτιδήποτε άλλο απαιτεί επίσης login
                         .anyRequest().authenticated()
                 )
-
-                // 4. Προσθήκη του JWT Filter ΠΡΙΝ το βασικό φίλτρο της Spring
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
