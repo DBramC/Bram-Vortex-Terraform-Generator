@@ -66,7 +66,7 @@ public class TerraformService {
 
                 String blueprintJsonString = blueprintNode.toPrettyString();
                 String repoName = analysisJob.getRepositoryName();
-                String computeType = blueprintNode.path("targetCompute").asText();
+                String computeType = blueprintNode.path("computeCategory").asText();
 
                 // --- PROMPTS ---
                 String promptNoAnsible = String.format("""
@@ -144,11 +144,11 @@ public class TerraformService {
 
                 if ("VM".equalsIgnoreCase(computeType)) {
                     selectedBasePrompt = promptYesAnsible;
-                    System.out.println("🎯 [TF-SERVICE] "+ computeType + " Using VM-optimized prompt.");
+                    System.out.println("🎯 [TF-SERVICE] - "+ computeType + " - Using VM-optimized prompt.");
                     sshPublicKey = vaultService.createAndStoreSshKeyPair(userId, repoName, terraformJobId);
                 } else {
                     selectedBasePrompt = promptNoAnsible;
-                    System.out.println("🎯 [TF-SERVICE] "+ computeType + " Using Container/K8S-optimized prompt.");
+                    System.out.println("🎯 [TF-SERVICE] - "+ computeType + " - Using Container/K8S-optimized prompt.");
                 }
 
                 String finalPrompt = selectedBasePrompt + "\n\n" + mapOutputConverter.getFormat();
