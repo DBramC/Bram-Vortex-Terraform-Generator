@@ -94,16 +94,21 @@ public class Terraform {
      * Endpoint για το Status.
      * Επιστρέφει την κατάσταση (GENERATING, COMPLETED, κτλ) στον ιδιοκτήτη.
      */
-    @GetMapping("/status/{terraformJobId}")
-    public ResponseEntity<String> getStatus(@PathVariable String terraformJobId, Authentication auth) {
+    @GetMapping("/status/by-analysis/{analysisJobId}")
+    public ResponseEntity<String> getStatusByAnalysis(@PathVariable String analysisJobId, Authentication auth) {
         String userId = auth.getName();
-        return terraformJobRepository.findById(terraformJobId)
+
+        // ΑΛΛΑΓΗ: Χρησιμοποιούμε το findByAnalysisJobId όπως ακριβώς έκανες και στο download!
+        return terraformJobRepository.findByAnalysisJobId(analysisJobId)
                 .map(job -> {
+                    // Έλεγχος ιδιοκτησίας
                     if (!job.getUserId().equals(userId)) {
                         return ResponseEntity.status(HttpStatus.FORBIDDEN).<String>build();
                     }
                     return ResponseEntity.ok(job.getStatus());
                 })
-                .orElse(ResponseEntity.notFound().build());
+                // Αν δεν το βρει στη βάση (π.χ. δεν έχει προλάβει να γραφτεί ακόμα),
+                // αντί για 404/403, λέμε στη React ότι ακόμα "δημιουργείται" (GENERATING)
+                .orElse(ResponseEntity.ok("GENERATING"));
     }
 }
