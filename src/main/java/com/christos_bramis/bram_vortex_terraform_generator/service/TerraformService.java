@@ -66,7 +66,7 @@ public class TerraformService {
 
                 String blueprintJsonString = blueprintNode.toPrettyString();
                 String repoName = analysisJob.getRepositoryName();
-                String computeType = blueprintNode.path("computeType").asText("Managed Container");
+                String computeType = String.valueOf(blueprintNode.path("computeType"));
 
 
                 // --- PROMPTS ---
