@@ -6,6 +6,7 @@ import com.christos_bramis.bram_vortex_terraform_generator.repository.AnalysisJo
 import com.christos_bramis.bram_vortex_terraform_generator.repository.TerraformJobRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode; // <--- Προστέθηκε το import
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.converter.MapOutputConverter;
 import org.springframework.stereotype.Service;
@@ -65,9 +66,31 @@ public class TerraformService {
                     throw new RuntimeException("Blueprint JSON is empty in database.");
                 }
 
-                String blueprintJsonString = blueprintNode.toPrettyString();
                 String repoName = analysisJob.getRepositoryName();
                 String computeType = blueprintNode.path("computeCategory").asText();
+                // Παίρνουμε το port με default το 8080 σε περίπτωση που λείπει
+                int targetPort = blueprintNode.path("targetContainerPort").asInt(8080);
+
+                String sshPublicKey = null;
+
+                // 1. DATA ENRICHMENT: Αν είναι VM, φτιάχνουμε κλειδί και το βάζουμε στο JSON ΠΡΙΝ το prompt
+                if ("VM".equalsIgnoreCase(computeType)) {
+                    System.out.println("🔑 [TF-SERVICE] Generating SSH Keys via Vault...");
+                    sshPublicKey = vaultService.createAndStoreSshKeyPair(userId, repoName, terraformJobId);
+
+                    if (blueprintNode.isObject()) {
+                        ObjectNode rootNode = (ObjectNode) blueprintNode;
+                        ObjectNode deploymentMetadata = (ObjectNode) rootNode.get("deploymentMetadata");
+                        if (deploymentMetadata == null) {
+                            deploymentMetadata = rootNode.putObject("deploymentMetadata");
+                        }
+                        deploymentMetadata.put("generatedPublicKey", sshPublicKey);
+                        System.out.println("💉 [TF-SERVICE] Injected Public Key into Blueprint JSON.");
+                    }
+                }
+
+                // 2. Μετατρέπουμε το (εμπλουτισμένο πλέον) JSON σε String για την AI
+                String blueprintJsonString = blueprintNode.toPrettyString();
 
                 // --- PROMPTS ---
                 String promptNoAnsible = String.format("""
@@ -82,12 +105,11 @@ public class TerraformService {
                         1. **Providers (`providers.tf`)**: Configure the provider based on 'targetCloud'.
                         2. **Variables (`variables.tf`)**: Extract configurations dynamically. No hardcoding of infrastructure sizes.
                         3. **Core Infrastructure (`main.tf`)**:
-                            - Provision the managed service based on 'targetCompute' (e.g., AWS ECS, EKS).
-                            - **Sizing**: Strictly use the values provided in the 'computeSpecs' object (e.g., CPU, Memory, Node Types, Replicas).
+                            - Provision the managed service based on 'targetCompute' on specific cloud provider (e.g., AWS ECS, EKS).
+                            - **Sizing**: Strictly use the values provided in the 'computeSpecs' object.
                             - **Security & IAM**: Generate necessary IAM Roles, Execution Policies, and Task Definitions.
-                            - **Networking**: Generate VPC, Subnets, and a Load Balancer (ALB/NLB). Route traffic to the 'targetContainerPort'.
-                            - **Health Checks**: If 'deploymentMetadata.healthCheckEndpoint' is provided, configure the Load Balancer target group health check to use that path.
-                            - **Environment Variables**: Inject ALL key-value pairs from 'configurationSettings' directly into the container definition/spec.
+                            - **Networking**: Generate VPC, Subnets, and a Load Balancer (ALB/NLB). Route traffic to port %d.
+                            - **Environment Variables**: Inject ALL key-value pairs from 'configurationSettings'.
                             - Apply tags: ManagedBy = "Bram Vortex", Project = "Repo_Name".
                         4. **Outputs (`outputs.tf`)**: 
                             - MANDATORY: Expose the Load Balancer DNS or Service URL as `app_url`.
@@ -104,7 +126,7 @@ public class TerraformService {
                         "outputs.tf": "<raw terraform code>",
                         "providers.tf": "<raw terraform code>"
                     }
-                    """, blueprintJsonString);
+                    """, blueprintJsonString, targetPort);
 
                 String promptYesAnsible = String.format("""
                     You are a Principal Cloud Architect and Terraform Expert specialized in Infrastructure-as-Service (IaaS).
@@ -117,21 +139,24 @@ public class TerraformService {
                     ENGINEERING REQUIREMENTS & BEST PRACTICES:
                         1. **Providers (`providers.tf`)**: Configure the provider based on 'targetCloud'.
                         2. **Variables (`variables.tf`)**: 
-                            - Extract configurations dynamically.
-                            - MANDATORY: Include a variable for `ssh_public_key` to be used for instance access.
+                            - Extract configurations dynamically from the blueprint.
+                            - **MANDATORY**: Create a variable named `ssh_public_key`.
+                            - **VALUE SOURCE**: Set the default value of this variable to the EXACT string found in 'deploymentMetadata.generatedPublicKey' within the blueprint.
                         3. **Core Infrastructure (`main.tf`)**:
-                            - **VM Sizing & OS**: Select the Instance Type based on 'computeSpecs.instance_family'. Select the Machine Image (AMI) based precisely on the 'deploymentMetadata.osDistro' (e.g., Ubuntu 22.04).
-                            - **SSH Access**: Create an SSH Key Pair resource (e.g., `aws_key_pair`) using the `ssh_public_key` variable, and attach it to the instance.
-                            - **Networking & Security**: Generate VPC, Subnets, and Security Groups. Ensure inbound traffic is explicitly allowed for port 22 (SSH) AND the 'targetContainerPort' defined in the JSON.
-                            - **Environment Variables**: Inject 'configurationSettings' into the VM metadata or user_data script.
+                            - **Complete Networking (CRITICAL)**: Provision VPC, Public Subnet, Internet Gateway (IGW), and Route Tables mapping '0.0.0.0/0' to the IGW.
+                            - **Security & Access**: 
+                                - Allow inbound traffic for port 22 (SSH) AND port %d (App) from '0.0.0.0/0'.
+                                - Allow ALL outbound traffic ('-1') from '0.0.0.0/0' so the VM can perform docker pulls.
+                            - **Compute**: Provision ONE `aws_instance` using 'computeSpecs.instance_family' and 'deploymentMetadata.osDistro'.
+                            - **SSH Access**: Create an `aws_key_pair` using the `ssh_public_key` variable and attach it to the instance.
+                            - Set `associate_public_ip_address = true`.
                             - Apply tags: ManagedBy = "Bram Vortex", Project = "Repo_Name".
                         4. **Outputs (`outputs.tf`)**: 
-                            - MANDATORY: Expose the Public IP as `instance_public_ip`. This is critical for downstream Ansible configuration.
+                            - MANDATORY: Expose the Public IP as `instance_public_ip`. This is critical for downstream configuration.
 
                     OUTPUT FORMAT (CRITICAL):
                         - Respond with a SINGLE, VALID JSON object and absolutely NOTHING else.
                         - DO NOT wrap the response in markdown blocks.
-                        - No introductory or concluding text. 
 
                     EXPECTED JSON SCHEMA:
                     {
@@ -140,23 +165,21 @@ public class TerraformService {
                         "outputs.tf": "<raw terraform code>",
                         "providers.tf": "<raw terraform code>"
                     }
-                    """, blueprintJsonString);
+                    """, blueprintJsonString, targetPort);
 
+                // 3. ΕΠΙΛΟΓΗ PROMPT
                 String selectedBasePrompt;
-                String sshPublicKey = null;
-
                 if ("VM".equalsIgnoreCase(computeType)) {
                     selectedBasePrompt = promptYesAnsible;
-                    System.out.println("🎯 [TF-SERVICE] - "+ computeType + " - Using VM-optimized prompt.");
-                    sshPublicKey = vaultService.createAndStoreSshKeyPair(userId, repoName, terraformJobId);
+                    System.out.println("🎯 [TF-SERVICE] - VM - Using VM-optimized prompt with Vault Key Injection.");
                 } else {
                     selectedBasePrompt = promptNoAnsible;
-                    System.out.println("🎯 [TF-SERVICE] - "+ computeType + " - Using Container/K8S-optimized prompt.");
+                    System.out.println("🎯 [TF-SERVICE] - " + computeType + " - Using Container/K8S-optimized prompt.");
                 }
 
                 String finalPrompt = selectedBasePrompt + "\n\n" + mapOutputConverter.getFormat();
 
-                Map<String, String> finalTfFiles = new HashMap<>(); // Η "μνήμη" μας
+                Map<String, String> finalTfFiles = new HashMap<>();
                 boolean isValid = false;
                 int attempts = 0;
                 String lastError = "";
@@ -168,7 +191,6 @@ public class TerraformService {
                     if (attempts == 1) {
                         currentPrompt = finalPrompt;
                     } else {
-                        // Στο retry, του θυμίζουμε ΤΙ θέλουμε (Schema) και του λέμε να στείλει ΟΛΑ τα αρχεία.
                         currentPrompt = "The previous Terraform code you generated had validation errors:\n" + lastError +
                                 "\n\nPlease fix the code and return a SINGLE, VALID JSON object containing ALL files." +
                                 "\n\nCRITICAL: You MUST include 'main.tf', 'variables.tf', 'outputs.tf', and 'providers.tf' in your response. Do not send partial updates." +
@@ -181,19 +203,18 @@ public class TerraformService {
                     assert aiResponse != null;
                     Map<String, String> newFiles = parseAiResponse(aiResponse);
 
-                    // ΑΝΤΙ ΝΑ ΔΙΑΓΡΑΦΟΥΜΕ ΤΑ ΠΑΛΙΑ ΑΡΧΕΙΑ, ΤΑ ΚΑΝΟΥΜΕ MERGE
                     finalTfFiles.putAll(newFiles);
 
-                    // Αν είναι VM, σιγουρευόμαστε ότι το κλειδί SSH δεν χάθηκε στο Merge
+                    // ΑΣΦΑΛΙΣΤΙΚΗ ΔΙΚΛΕΙΔΑ: Αν το LLM το ξέχασε παρόλο το Prompt, το βάζουμε με το ζόρι (Defensive Programming)
                     if (sshPublicKey != null && finalTfFiles.containsKey("variables.tf")) {
                         String currentVars = finalTfFiles.get("variables.tf");
                         if (!currentVars.contains("ssh_public_key")) {
+                            System.err.println("⚠️ [TF-SERVICE] AI forgot the ssh key. Forcing injection...");
                             String injectedVar = "\nvariable \"ssh_public_key\" { default = \"" + sshPublicKey + "\" }\n";
                             finalTfFiles.put("variables.tf", currentVars + injectedVar);
                         }
                     }
 
-                    // Ελέγχουμε αν όντως έχουμε όλα τα βασικά αρχεία, αλλιώς κάτι πήγε πολύ στραβά
                     if (!finalTfFiles.containsKey("main.tf") || !finalTfFiles.containsKey("providers.tf")) {
                         lastError = "Missing critical files (main.tf or providers.tf) in the JSON response.";
                         System.err.println("⚠️ [TF-SERVICE] Validation Error: " + lastError);
@@ -233,6 +254,7 @@ public class TerraformService {
         });
     }
 
+    // ... (Οι υπόλοιπες μέθοδοι παραμένουν ως έχουν: notifyOrchestrator, parseAiResponse, performValidation κτλ.)
     private void notifyOrchestrator(String jobId, String service, String status, String token) {
         String url = String.format("http://repo-analyzer-svc/dashboard/internal/callback/%s?service=%s&status=%s",
                 jobId, service, status);
@@ -240,7 +262,7 @@ public class TerraformService {
         RestClient internalClient = RestClient.create();
         internalClient.post()
                 .uri(url)
-                .header("Authorization", "Bearer " + token) // 👈 Το token επιστρέφει στον Analyzer
+                .header("Authorization", "Bearer " + token)
                 .retrieve()
                 .toBodilessEntity();
     }
