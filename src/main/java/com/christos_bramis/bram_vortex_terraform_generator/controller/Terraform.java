@@ -34,12 +34,10 @@ public class Terraform {
     @PostMapping("/generate/{analysisJobId}")
     public ResponseEntity<String> generateTerraform(
             @PathVariable String analysisJobId,
-            Authentication auth,
-            @AuthenticationPrincipal Jwt jwt) {
+            Authentication auth) {
 
-        // 1. Τώρα μπορείς να πάρεις το Token και το UserID χωρίς κίνδυνο για Exception
-        String token = jwt.getTokenValue();
-        String userId = jwt.getSubject();
+        String userId = (String) auth.getPrincipal();
+        String token = (String) auth.getCredentials();
         System.out.println("🚀 [TF CONTROLLER] Webhook received for Job: " + analysisJobId + " from User: " + userId);
 
         try {
