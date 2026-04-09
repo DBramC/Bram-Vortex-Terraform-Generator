@@ -8,8 +8,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Objects;
 import java.util.UUID;
 
 @RestController
@@ -34,13 +36,14 @@ public class Terraform {
             Authentication auth) { // <--- Λήψη από το Security Context
 
         String userId = auth.getName();
+        String token = ((Jwt) Objects.requireNonNull(auth.getPrincipal())).getTokenValue();
         System.out.println("🚀 [TF CONTROLLER] Webhook received for Job: " + analysisJobId + " from User: " + userId);
 
         try {
             String terraformJobId = UUID.randomUUID().toString();
 
             // Καλούμε το Service χρησιμοποιώντας την έγκυρη ταυτότητα του χρήστη
-            terraformService.generateAndSaveTerraform(terraformJobId, analysisJobId, userId);
+            terraformService.generateAndSaveTerraform(terraformJobId, analysisJobId, userId, token);
 
             return ResponseEntity.ok(terraformJobId);
         } catch (Exception e) {
@@ -90,5 +93,6 @@ public class Terraform {
                 .orElse(ResponseEntity.notFound().build()); // Αν δεν βρεθεί καν στη βάση, 404
     }
 
+    // TODO: na dw an mporw sth telikh na diagrapsw to download endpoint
 
 }

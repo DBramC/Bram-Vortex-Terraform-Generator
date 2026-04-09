@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.converter.MapOutputConverter;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -43,7 +44,7 @@ public class TerraformService {
         this.mapOutputConverter = new MapOutputConverter();
     }
 
-    public void generateAndSaveTerraform(String terraformJobId, String analysisJobId, String userId) {
+    public void generateAndSaveTerraform(String terraformJobId, String analysisJobId, String userId, String token) {
         System.out.println("🚀 [TF-SERVICE] Starting generation for TF Job: " + terraformJobId);
 
         TerraformJob job = new TerraformJob();
@@ -221,14 +222,29 @@ public class TerraformService {
                 job.setTerraformZip(zipBytes);
                 job.setStatus("COMPLETED");
                 terraformJobRepository.save(job);
+                notifyOrchestrator(analysisJobId, "TERRAFORM", "COMPLETED", token);
 
             } catch (Exception e) {
                 System.err.println("❌ [TF-SERVICE ERROR]: " + e.getMessage());
                 job.setStatus("FAILED");
                 terraformJobRepository.save(job);
+                notifyOrchestrator(analysisJobId, "TERRAFORM", "FAILED", token);
             }
         });
     }
+
+    private void notifyOrchestrator(String jobId, String service, String status, String token) {
+        String url = String.format("http://repo-analyzer-svc/dashboard/internal/callback/%s?service=%s&status=%s",
+                jobId, service, status);
+
+        RestClient internalClient = RestClient.create();
+        internalClient.post()
+                .uri(url)
+                .header("Authorization", "Bearer " + token) // 👈 Το token επιστρέφει στον Analyzer
+                .retrieve()
+                .toBodilessEntity();
+    }
+
     private Map<String, String> parseAiResponse(String response) {
         String clean = response.trim();
         if (clean.startsWith("```")) {
