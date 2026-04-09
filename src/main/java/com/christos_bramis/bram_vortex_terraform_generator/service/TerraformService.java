@@ -72,27 +72,29 @@ public class TerraformService {
                 String promptNoAnsible = String.format("""
                     You are a Principal Cloud Architect and Terraform Expert specialized in Container Orchestration and Serverless.
                     Your task is to generate PRODUCTION-READY Terraform code for a MANAGED CONTAINER/K8S deployment based on the blueprint.
-        
+
                     --- ARCHITECTURAL BLUEPRINT (JSON) ---
-                    %s  
+                    %s
                     --------------------------------------
 
                     ENGINEERING REQUIREMENTS & BEST PRACTICES:
-                    1. **Providers (`providers.tf`)**: Configure the correct cloud provider and region based on the blueprint.
-                    2. **Variables (`variables.tf`)**: Extract configurations like cluster names, container images, and ports. No hardcoding.
-                    3. **Core Infrastructure (`main.tf`)**:
-                        - Provision the managed service (e.g., AWS ECS, Fargate, or Kubernetes Cluster).
-                        - **Security & IAM**: Generate necessary IAM Roles, Execution Policies, and Task Definitions.
-                        - **Networking**: Generate VPC, Subnets, and a Load Balancer (ALB/NLB). Route traffic to the 'targetContainerPort'.
-                        - Inject environment variables directly into the container definition/spec.
-                        - Apply tags: ManagedBy = "Bram Vortex", Project = "Repo_Name".
-                    4. **Outputs (`outputs.tf`)**: 
-                    - MANDATORY: Expose the Load Balancer DNS or Service URL as `app_url`.
+                        1. **Providers (`providers.tf`)**: Configure the provider based on 'targetCloud'.
+                        2. **Variables (`variables.tf`)**: Extract configurations dynamically. No hardcoding of infrastructure sizes.
+                        3. **Core Infrastructure (`main.tf`)**:
+                            - Provision the managed service based on 'targetCompute' (e.g., AWS ECS, EKS).
+                            - **Sizing**: Strictly use the values provided in the 'computeSpecs' object (e.g., CPU, Memory, Node Types, Replicas).
+                            - **Security & IAM**: Generate necessary IAM Roles, Execution Policies, and Task Definitions.
+                            - **Networking**: Generate VPC, Subnets, and a Load Balancer (ALB/NLB). Route traffic to the 'targetContainerPort'.
+                            - **Health Checks**: If 'deploymentMetadata.healthCheckEndpoint' is provided, configure the Load Balancer target group health check to use that path.
+                            - **Environment Variables**: Inject ALL key-value pairs from 'configurationSettings' directly into the container definition/spec.
+                            - Apply tags: ManagedBy = "Bram Vortex", Project = "Repo_Name".
+                        4. **Outputs (`outputs.tf`)**: 
+                            - MANDATORY: Expose the Load Balancer DNS or Service URL as `app_url`.
 
                     OUTPUT FORMAT (CRITICAL):
-                    - Respond with a SINGLE, VALID JSON object and absolutely NOTHING else.
-                    - DO NOT wrap the response in markdown blocks.
-                    - No introductory or concluding text. 
+                        - Respond with a SINGLE, VALID JSON object and absolutely NOTHING else.
+                        - DO NOT wrap the response in markdown blocks.
+                        - No introductory or concluding text. 
 
                     EXPECTED JSON SCHEMA:
                     {
@@ -111,31 +113,31 @@ public class TerraformService {
                     %s
                     --------------------------------------
 
-                    ENGINEERING REQUIREMENTS & BEST Practices:
-                    1. **Providers (`providers.tf`)**: Configure the correct cloud provider and region based on the blueprint.
-                    2. **Variables (`variables.tf`)**: 
-                       - Extract configurations like instance sizes, ports, and env vars.
-                       - MANDATORY: Include a variable for `ssh_public_key` to be used for instance access.
-                    3. **Core Infrastructure (`main.tf`)**:
-                       - Provision the Virtual Machine instance.
-                       - **SSH Access**: Create an SSH Key Pair resource (e.g., `aws_key_pair`) using the `ssh_public_key` variable.
-                       - **Security**: Generate VPC, Subnets, and Security Groups. Open port 22 (SSH) and the blueprint's 'targetContainerPort' for inbound traffic.
-                       - Inject environment variables into the VM metadata or user_data.
-                       - Apply tags: ManagedBy = "Bram Vortex", Project = "Repo_Name".
-                    4. **Outputs (`outputs.tf`)**: 
-                       - MANDATORY: Expose the Public IP as `instance_public_ip`. This is critical for downstream Ansible configuration.
+                    ENGINEERING REQUIREMENTS & BEST PRACTICES:
+                        1. **Providers (`providers.tf`)**: Configure the provider based on 'targetCloud'.
+                        2. **Variables (`variables.tf`)**: 
+                            - Extract configurations dynamically.
+                            - MANDATORY: Include a variable for `ssh_public_key` to be used for instance access.
+                        3. **Core Infrastructure (`main.tf`)**:
+                            - **VM Sizing & OS**: Select the Instance Type based on 'computeSpecs.instance_family'. Select the Machine Image (AMI) based precisely on the 'deploymentMetadata.osDistro' (e.g., Ubuntu 22.04).
+                            - **SSH Access**: Create an SSH Key Pair resource (e.g., `aws_key_pair`) using the `ssh_public_key` variable, and attach it to the instance.
+                            - **Networking & Security**: Generate VPC, Subnets, and Security Groups. Ensure inbound traffic is explicitly allowed for port 22 (SSH) AND the 'targetContainerPort' defined in the JSON.
+                            - **Environment Variables**: Inject 'configurationSettings' into the VM metadata or user_data script.
+                            - Apply tags: ManagedBy = "Bram Vortex", Project = "Repo_Name".
+                        4. **Outputs (`outputs.tf`)**: 
+                            - MANDATORY: Expose the Public IP as `instance_public_ip`. This is critical for downstream Ansible configuration.
 
                     OUTPUT FORMAT (CRITICAL):
-                    - Respond with a SINGLE, VALID JSON object and absolutely NOTHING else.
-                    - DO NOT wrap the response in markdown blocks.
-                    - No introductory or concluding text. 
+                        - Respond with a SINGLE, VALID JSON object and absolutely NOTHING else.
+                        - DO NOT wrap the response in markdown blocks.
+                        - No introductory or concluding text. 
 
                     EXPECTED JSON SCHEMA:
                     {
-                      "main.tf": "<raw terraform code>",
-                      "variables.tf": "<raw terraform code>",
-                      "outputs.tf": "<raw terraform code>",
-                      "providers.tf": "<raw terraform code>"
+                        "main.tf": "<raw terraform code>",
+                        "variables.tf": "<raw terraform code>",
+                        "outputs.tf": "<raw terraform code>",
+                        "providers.tf": "<raw terraform code>"
                     }
                     """, blueprintJsonString);
 
