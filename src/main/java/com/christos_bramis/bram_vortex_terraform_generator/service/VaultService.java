@@ -47,8 +47,10 @@ public class VaultService {
 
             System.out.println("🏦 [VAULT-SERVICE] Storing Private Key in Vault path: " + vaultPath);
 
-            vaultTemplate.write(vaultPath, Map.of("private_key", privateKeyPem));
-            vaultTemplate.write(vaultPath, Map.of("public_key", publicKeyOpenSSH));
+            vaultTemplate.write(vaultPath, Map.of(
+                    "private_key", privateKeyPem,
+                    "public_key", publicKeyOpenSSH
+            ));
 
 
             return publicKeyOpenSSH;
