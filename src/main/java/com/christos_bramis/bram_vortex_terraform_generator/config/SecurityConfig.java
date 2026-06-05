@@ -37,6 +37,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // Βεβαιώσου ότι τα paths εδώ ταιριάζουν με αυτά που στέλνει ο Kong
                         .requestMatchers("/terraform/status/**", "/terraform/download/**").authenticated()
+                        .requestMatchers("/actuator/**").permitAll()
                         .requestMatchers("/terraform/generate/**").authenticated()
                         .anyRequest().authenticated()
                 )
